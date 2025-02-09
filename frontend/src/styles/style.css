@@ -1,0 +1,57 @@
+:root {
+    --primary-color: #4F46E5;
+    --secondary-color: #6366F1;
+    --background-color: #F3F4F6;
+    --accent-color: #EC4899;
+    --dark-mode-primary: #818CF8;
+    --dark-mode-background: #1F2937;
+    --font-family: "Inter, sans-serif";
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-family);
+    background-color: var(--background-color);
+    color: #333;
+}
+
+h1 {
+    font-size: 2.5rem;
+    font-weight: bold;
+}
+
+h2 {
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+h3 {
+    font-size: 1.75rem;
+    font-weight: semibold;
+}
+
+button {
+    background-color: var(--primary-color);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 20px;
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out;
+}
+
+button:hover {
+    background-color: #4338CA;
+}
+
+input, select {
+    border: 1px solid #D1D5DB;
+    padding: 10px;
+}
+
+input:focus {
+    border: 1px solid var(--primary-color);
+}
+
+/* Add additional global styles as needed */

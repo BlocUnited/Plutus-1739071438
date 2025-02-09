@@ -1,0 +1,116 @@
+name: Deploy to Azure Container Apps
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+env:
+  DOCKERHUB_USERNAME: blocunited
+  FRONTEND_REPOSITORY: blocunited/containerappmoz-frontend-1739071434-d55b8b4a
+  BACKEND_REPOSITORY: blocunited/containerappmoz-backend-1739071434-d55b8b4a
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Build and push Frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./frontend
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-f-${{ github.run_id }}:${{ github.sha }}
+            ${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-f-${{ github.run_id }}:latest
+      - name: Build and push Backend image
+        uses: docker/build-push-action@v4
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-b-${{ github.run_id }}:${{ github.sha }}
+            ${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-b-${{ github.run_id }}:latest
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+      - name: Validate Azure Environment
+        run: |-
+          az group show --name "${{secrets.RESOURCE_GROUP}}"
+                  az containerapp env show --name "${{secrets.CONTAINER_APP_ENVIRONMENT}}" --resource-group "${{secrets.RESOURCE_GROUP}}"
+                  
+      - name: Install Azure Container Apps extension
+        run: az extension add --name containerapp
+      - name: Ensure Resource Group Exists
+        run: |-
+          az group show --name "${{secrets.RESOURCE_GROUP}}" || \
+                  az group create --name "${{secrets.RESOURCE_GROUP}}" --location eastus
+                  
+      - name: Ensure Managed Environment Exists
+        run: |-
+          az containerapp env show --name "${{secrets.CONTAINER_APP_ENVIRONMENT}}" --resource-group "${{secrets.RESOURCE_GROUP}}" || \
+                  az containerapp env create --name "${{secrets.CONTAINER_APP_ENVIRONMENT}}" --resource-group "${{secrets.RESOURCE_GROUP}}" --location eastus
+                  
+      - name: Deploy Backend to Azure Container Apps
+        run: |-
+          az containerapp create \
+                      --name ${{ secrets.CONTAINER_APP_NAME }}-b-${{ github.run_id }} \
+                      --resource-group "${{ secrets.RESOURCE_GROUP }}" \
+                      --environment "${{ secrets.CONTAINER_APP_ENVIRONMENT }}" \
+                      --image "${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-b-${{ github.run_id }}:${{ github.sha }}" \
+                      --ingress internal \
+                      --target-port 5000 \
+                      --min-replicas 1 --max-replicas 10 \
+                      --registry-server index.docker.io \
+                      --registry-username "${{ env.DOCKERHUB_USERNAME }}" \
+                      --registry-password "${{ secrets.DOCKERHUB_TOKEN }}" \
+                      --env-vars DATABASE_URI="${{ secrets.DATABASE_URI }}" AZURE_SIGNALR_CONNECTION_STRING="${{ secrets.AZURE_SIGNALR_CONNECTION_STRING }}" AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" PYTHONPATH="/" BACKEND_URL="https://placeholder-backend-url" FRONTEND_URL="https://placeholder-frontend-url"
+                  
+      - name: Get Backend Deployment URL
+        run: |-
+          backend_url=$(az containerapp show -n "${{secrets.CONTAINER_APP_NAME}}-b-${{github.run_id}}" -g "${{secrets.RESOURCE_GROUP}}" --query properties.configuration.ingress.fqdn -o tsv)
+                  az containerapp update -n "${{secrets.CONTAINER_APP_NAME}}-b-${{github.run_id}}" -g "${{secrets.RESOURCE_GROUP}}" --set-env-vars BACKEND_URL=https://$backend_url
+                  echo "BACKEND_URL=https://$backend_url" >> $GITHUB_ENV
+                  
+      - name: Deploy Frontend to Azure Container Apps
+        run: |-
+          az containerapp create \
+                      --name ${{ secrets.CONTAINER_APP_NAME }}-f-${{ github.run_id }} \
+                      --resource-group "${{ secrets.RESOURCE_GROUP }}" \
+                      --environment "${{ secrets.CONTAINER_APP_ENVIRONMENT }}" \
+                      --image "${{ env.DOCKERHUB_USERNAME }}/${{ secrets.CONTAINER_APP_NAME }}-f-${{ github.run_id }}:${{ github.sha }}" \
+                      --ingress external \
+                      --target-port 80 \
+                      --registry-server index.docker.io \
+                      --registry-username "${{ env.DOCKERHUB_USERNAME }}" \
+                      --registry-password "${{ secrets.DOCKERHUB_TOKEN }}" \
+                      --env-vars AZURE_SIGNALR_CONNECTION_STRING="${{ secrets.AZURE_SIGNALR_CONNECTION_STRING }}" AZURE_STORAGE_CONNECTION_STRING="${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" REACT_APP_BACKEND_URL="https://placeholder-backend-url"
+                  
+      - name: Get Frontend Deployment URL
+        run: |-
+          frontend_url=$(az containerapp show -n "${{secrets.CONTAINER_APP_NAME}}-f-${{github.run_id}}" -g "${{secrets.RESOURCE_GROUP}}" --query properties.configuration.ingress.fqdn -o tsv)
+                  az containerapp update -n "${{secrets.CONTAINER_APP_NAME}}-f-${{github.run_id}}" -g "${{secrets.RESOURCE_GROUP}}" --set-env-vars FRONTEND_URL=https://$frontend_url REACT_APP_BACKEND_URL=https://$backend_url
+                  echo "FRONTEND_URL=https://$frontend_url" >> $GITHUB_ENV
+                  
+      - name: Output Deployment URLs
+        run: |-
+          echo "Frontend deployed to: ${{env.FRONTEND_URL}}"
+                  echo "Backend deployed to: ${{env.BACKEND_URL}}"
+                  echo "${{env.FRONTEND_URL}}" > frontend_url.txt
+                  echo "${{env.BACKEND_URL}}" > backend_url.txt
+                  
+      - name: Upload Deployment URL Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-urls-${{github.run_id}}
+          path: "frontend_url.txt\nbackend_url.txt"
